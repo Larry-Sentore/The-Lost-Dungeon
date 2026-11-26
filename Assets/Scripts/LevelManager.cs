@@ -76,6 +76,16 @@ public class LevelManager : MonoBehaviour
 
     private EnemyController FindTemplate(string name, EnemyKind kind)
     {
+        if (assetLoader != null)
+        {
+            if (TryFindBundledTemplate(name, out EnemyController bundledTemplate))
+            {
+                bundledTemplate.Configure(kind);
+                bundledTemplate.gameObject.SetActive(true);
+                return bundledTemplate;
+            }
+        }
+
         EnemyController[] existing = FindObjectsByType<EnemyController>(FindObjectsInactive.Include);
         foreach (EnemyController enemy in existing)
         {
@@ -104,6 +114,18 @@ public class LevelManager : MonoBehaviour
         GameObject fallback = new GameObject(name);
         fallback.transform.position = new Vector3(8f, 0f, 10f);
         return AddEnemyComponents(fallback, kind);
+    }
+
+    private bool TryFindBundledTemplate(string name, out EnemyController template)
+    {
+        template = null;
+        if (!assetLoader.TryGetPrefab(name, out GameObject prefab))
+        {
+            return false;
+        }
+        GameObject instance = Instantiate(prefab);
+        template = instance.GetComponent<EnemyController>() ?? instance.AddComponent<EnemyController>();
+        return template != null;
     }
 
     private void Spawn(EnemyController template, EnemyKind kind, int count)
@@ -149,7 +171,10 @@ public class LevelManager : MonoBehaviour
 
     private void HandleEnemyDied(EnemyController enemy)
     {
-        activeEnemies.Remove(enemy);
+        if (!activeEnemies.Remove(enemy))
+        {
+            return;
+        }
         GameEvents.RaiseEnemyDefeated(activeEnemies.Count);
         if (activeEnemies.Count == 0)
         {

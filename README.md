@@ -46,6 +46,10 @@ Enemy durability and player damage:
 
 The code currently uses scene content as the fallback. Bundles are not duplicated into the repository until level assets are assigned bundle names.
 
+The loader caches each bundle's assets, exposes named prefabs to `LevelManager`, and unloads
+the previous bundle before loading the next level. A missing bundle or asset falls back to
+scene content and reports the failure without blocking gameplay.
+
 ## REST API
 
 `LeaderboardService` submits level completion scores to an HTTP endpoint. If the request fails or the endpoint is unavailable, the game reports a local fallback message and continues to preserve JSON progress.
@@ -57,3 +61,18 @@ Conditional compilation configures input and frame/performance settings for Wind
 ## Tests
 
 The EditMode test assembly contains coverage for enemy health, player damage, inventory operations, level progression, sorting/damage algorithms, and pooling setup.
+
+## Algorithms
+
+- **Nearest-enemy search**: Iterates enemies and compares squared distances to select the
+  closest live target, avoiding expensive square roots.
+- **Damage calculation**: Combines hit count and base damage, then subtracts defence and
+  clamps the result at zero.
+- **Descending damage ranking**: Sorts damage values and exposes the highest score for
+  leaderboard-style ranking.
+
+## Mobile and build platforms
+
+The project uses Unity conditional compilation for Windows, WebGL, Android, and iOS input
+and performance settings. Mobile movement uses the left half of the touchscreen, attacks
+use the right half, and the upper/right and lower/right regions activate separate abilities.

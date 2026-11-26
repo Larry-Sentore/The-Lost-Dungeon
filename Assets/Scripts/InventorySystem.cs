@@ -35,10 +35,12 @@ public class InventorySystem : ICollectable
         if (items.TryGetValue(itemId, out IInventoryItem existing))
         {
             existing.Quantity += quantity;
+            GameEvents.RaiseInventoryChanged(itemId, existing.Quantity);
         }
         else
         {
             items[itemId] = new InventoryItem(itemId, quantity);
+            GameEvents.RaiseInventoryChanged(itemId, quantity);
         }
     }
 
@@ -53,6 +55,7 @@ public class InventorySystem : ICollectable
         {
             items.Remove(itemId);
         }
+        GameEvents.RaiseInventoryChanged(itemId, item.Quantity);
         return true;
     }
 

@@ -44,6 +44,7 @@ public class SwordSlashAbility : BaseAbility
         }
 
         owner.GetComponent<Animator>()?.SetTrigger("Slash");
+        GameEvents.RaiseAbilityChanged(AbilityName, false);
         Collider[] hits = Physics.OverlapSphere(owner.transform.position, radius);
         foreach (Collider hit in hits)
         {
@@ -73,6 +74,7 @@ public class ShieldBashAbility : BaseAbility
         }
 
         owner.GetComponent<Animator>()?.SetTrigger("Shield");
+        GameEvents.RaiseAbilityChanged(AbilityName, false);
         Collider[] hits = Physics.OverlapSphere(owner.transform.position, radius);
         foreach (Collider hit in hits)
         {

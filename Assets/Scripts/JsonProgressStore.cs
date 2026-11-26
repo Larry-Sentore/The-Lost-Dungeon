@@ -36,7 +36,16 @@ public static class JsonProgressStore
             {
                 return null;
             }
-            return JsonUtility.FromJson<SaveData>(File.ReadAllText(SavePath));
+            SaveData data = JsonUtility.FromJson<SaveData>(File.ReadAllText(SavePath));
+            if (data == null)
+            {
+                return null;
+            }
+            data.HighestUnlockedLevel = Mathf.Clamp(data.HighestUnlockedLevel, 1, 5);
+            data.CompletedLevel = Mathf.Clamp(data.CompletedLevel, 0, 5);
+            data.PlayerHealth = Mathf.Clamp(data.PlayerHealth, 0f, 100f);
+            data.Inventory ??= Array.Empty<string>();
+            return data;
         }
         catch (Exception exception)
         {

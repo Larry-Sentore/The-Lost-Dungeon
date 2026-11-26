@@ -38,16 +38,19 @@ public class LeaderboardService : MonoBehaviour
             request.result == UnityWebRequest.Result.ProtocolError)
         {
             RequestCompleted?.Invoke(false, "Online leaderboard unavailable. Progress remains saved locally.");
+            GameEvents.RaiseRequestStatusChanged("Online leaderboard unavailable. Progress remains saved locally.", false);
             yield break;
         }
 #else
         if (request.result != UnityWebRequest.Result.Success)
         {
             RequestCompleted?.Invoke(false, "Online leaderboard unavailable. Progress remains saved locally.");
+            GameEvents.RaiseRequestStatusChanged("Online leaderboard unavailable. Progress remains saved locally.", false);
             yield break;
         }
 #endif
 
         RequestCompleted?.Invoke(true, "Score submitted.");
+        GameEvents.RaiseRequestStatusChanged("Score submitted.", true);
     }
 }

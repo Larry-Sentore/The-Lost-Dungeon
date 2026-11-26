@@ -2,7 +2,6 @@
   "name": "LostDungeon.EditModeTests",
   "rootNamespace": "",
   "references": [
-    "Assembly-CSharp",
     "UnityEngine.TestRunner",
     "UnityEditor.TestRunner"
   ],

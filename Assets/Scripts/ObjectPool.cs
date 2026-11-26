@@ -43,7 +43,10 @@ public class ObjectPool<T> where T : Component
         {
             return;
         }
-        inUse.Remove(item);
+        if (!inUse.Remove(item))
+        {
+            return;
+        }
         item.gameObject.SetActive(false);
         available.Push(item);
     }

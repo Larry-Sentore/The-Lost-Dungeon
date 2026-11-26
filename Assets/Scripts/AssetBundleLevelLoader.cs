@@ -5,6 +5,8 @@ using UnityEngine;
 public class AssetBundleLevelLoader : MonoBehaviour
 {
     private AssetBundle loadedBundle;
+    private readonly System.Collections.Generic.Dictionary<string, UnityEngine.Object> loadedAssets =
+        new System.Collections.Generic.Dictionary<string, UnityEngine.Object>(StringComparer.OrdinalIgnoreCase);
 
     public event Action<string, bool> LoadingFinished;
 
@@ -20,6 +22,7 @@ public class AssetBundleLevelLoader : MonoBehaviour
             loadedBundle.Unload(false);
             loadedBundle = null;
         }
+        loadedAssets.Clear();
 
         string platformFolder = GetPlatformFolder();
         string path = System.IO.Path.Combine(Application.streamingAssetsPath, platformFolder, $"level-{level}");
@@ -33,7 +36,27 @@ public class AssetBundleLevelLoader : MonoBehaviour
         }
 
         loadedBundle = request.assetBundle;
+        AssetBundleRequest assetsRequest = loadedBundle.LoadAllAssetsAsync();
+        yield return assetsRequest;
+        foreach (UnityEngine.Object asset in assetsRequest.allAssets)
+        {
+            if (asset != null)
+            {
+                loadedAssets[asset.name] = asset;
+            }
+        }
         LoadingFinished?.Invoke($"Level {level} AssetBundle loaded.", true);
+    }
+
+    public bool TryGetPrefab(string assetName, out GameObject prefab)
+    {
+        if (loadedAssets.TryGetValue(assetName, out UnityEngine.Object asset))
+        {
+            prefab = asset as GameObject;
+            return prefab != null;
+        }
+        prefab = null;
+        return false;
     }
 
     public void Unload()
@@ -43,6 +66,7 @@ public class AssetBundleLevelLoader : MonoBehaviour
             loadedBundle.Unload(true);
             loadedBundle = null;
         }
+        loadedAssets.Clear();
     }
 
     private static string GetPlatformFolder()

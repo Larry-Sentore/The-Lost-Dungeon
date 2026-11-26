@@ -47,5 +47,19 @@ public static class MobileInput
         }
     }
 
-    public static bool AbilityTwoPressed => false;
+    public static bool AbilityTwoPressed
+    {
+        get
+        {
+            foreach (Touch touch in Input.touches)
+            {
+                if (touch.phase == TouchPhase.Began && touch.position.x > Screen.width * 0.75f &&
+                    touch.position.y <= Screen.height * 0.25f)
+                {
+                    return true;
+                }
+            }
+            return false;
+        }
+    }
 }
