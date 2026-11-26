@@ -14,7 +14,7 @@ public class UiGameController : MonoBehaviour
     {
         levelManager = FindAnyObjectByType<LevelManager>();
         mainMenu = FindNamedObject("Main Menu");
-        settings = FindNamedObject("Settings");
+        settings = FindNamedObject("Settings", preferInactive: true);
         healthBar = FindNamedObject("healthbar");
         objectiveText = FindNamedTransform("Objective_text");
         healthStages = new[]
@@ -30,6 +30,12 @@ public class UiGameController : MonoBehaviour
         HookButton("Continue_btn", ContinueGame);
         HookButton("Settings_btn", OpenSettings);
         HookButton("Exit_btn", ExitGame);
+        HookButton("back_btn", CloseSettings);
+        for (int level = 1; level <= 5; level++)
+        {
+            int levelNumber = level;
+            HookButton($"Level_{levelNumber}_Unlocked", () => StartLevel(levelNumber));
+        }
 
         GameEvents.HealthChanged += OnHealthChanged;
         GameEvents.ObjectiveChanged += OnObjectiveChanged;
@@ -62,6 +68,8 @@ public class UiGameController : MonoBehaviour
     private void ContinueGame()
     {
         SaveData data = JsonProgressStore.Load() ?? new SaveData();
+        data.PlayerHealth = 100f;
+        JsonProgressStore.Save(data);
         if (mainMenu != null)
         {
             mainMenu.SetActive(false);
@@ -69,11 +77,35 @@ public class UiGameController : MonoBehaviour
         levelManager?.StartLevel(data.HighestUnlockedLevel);
     }
 
+    private void StartLevel(int level)
+    {
+        SaveData data = JsonProgressStore.Load() ?? new SaveData();
+        if (level > data.HighestUnlockedLevel)
+        {
+            return;
+        }
+        data.PlayerHealth = 100f;
+        JsonProgressStore.Save(data);
+        if (mainMenu != null)
+        {
+            mainMenu.SetActive(false);
+        }
+        levelManager?.StartLevel(level);
+    }
+
     private void OpenSettings()
     {
         if (settings != null)
         {
             settings.SetActive(true);
+        }
+    }
+
+    private void CloseSettings()
+    {
+        if (settings != null)
+        {
+            settings.SetActive(false);
         }
     }
 
@@ -94,14 +126,14 @@ public class UiGameController : MonoBehaviour
         }
 
         float percent = maximum <= 0f ? 0f : current / maximum * 100f;
+        int activeStage = percent > 75f ? 0 : percent > 50f ? 1 : percent > 25f ? 2 : 3;
         for (int i = 0; i < healthStages.Length; i++)
         {
             if (healthStages[i] == null)
             {
                 continue;
             }
-            int threshold = new[] { 100, 75, 50, 25 }[i];
-            healthStages[i].SetActive(percent >= threshold);
+            healthStages[i].SetActive(percent > 0f && i == activeStage);
         }
     }
 
@@ -169,6 +201,28 @@ public class UiGameController : MonoBehaviour
     private static GameObject FindNamedObject(string name)
     {
         return FindNamedTransform(name)?.gameObject;
+    }
+
+    private static GameObject FindNamedObject(string name, bool preferInactive)
+    {
+        Transform selected = null;
+        foreach (Transform transform in Resources.FindObjectsOfTypeAll<Transform>())
+        {
+            if (transform.name != name)
+            {
+                continue;
+            }
+            if (!preferInactive)
+            {
+                return transform.gameObject;
+            }
+            if (!transform.gameObject.activeSelf)
+            {
+                return transform.gameObject;
+            }
+            selected = transform;
+        }
+        return selected?.gameObject;
     }
 
     private static Transform FindNamedTransform(string name)

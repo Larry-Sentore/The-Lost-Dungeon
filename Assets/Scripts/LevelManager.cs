@@ -51,6 +51,7 @@ public class LevelManager : MonoBehaviour
 
         currentLevel = level;
         assetLoader?.LoadLevelBundle(level);
+        ClearExistingEnemyObjects();
         ClearLevelEnemies();
         BuildLevel(level);
         GameEvents.RaiseObjectiveChanged($"Defeat every enemy in level {level}");
@@ -122,7 +123,7 @@ public class LevelManager : MonoBehaviour
 
         for (int i = 0; i < count; i++)
         {
-            EnemyController enemy = i == 0
+            EnemyController enemy = i == 0 && kind != EnemyKind.GiantCannonBoss
                 ? template
                 : Instantiate(template);
             if (enemy == null)
@@ -133,6 +134,11 @@ public class LevelManager : MonoBehaviour
             enemy.name = $"{kind} {i + 1}";
             enemy.gameObject.SetActive(true);
             enemy.Configure(kind);
+            if (kind == EnemyKind.GiantCannonBoss)
+            {
+                enemy.transform.localScale *= 2.5f;
+                enemy.name = "Giant Cannon Boss";
+            }
             float angle = (360f / Mathf.Max(1, count)) * i;
             Vector3 offset = Quaternion.Euler(0f, angle, 0f) * Vector3.forward * (count == 1 ? 0f : 2.2f);
             enemy.transform.position = center + offset;
@@ -166,6 +172,19 @@ public class LevelManager : MonoBehaviour
             }
         }
         activeEnemies.Clear();
+    }
+
+    private void ClearExistingEnemyObjects()
+    {
+        foreach (EnemyController enemy in FindObjectsByType<EnemyController>(FindObjectsInactive.Include))
+        {
+            if (enemy == null)
+            {
+                continue;
+            }
+            enemy.Died -= HandleEnemyDied;
+            enemy.gameObject.SetActive(false);
+        }
     }
 
     public static EnemyController AddEnemyComponents(GameObject target, EnemyKind kind)
