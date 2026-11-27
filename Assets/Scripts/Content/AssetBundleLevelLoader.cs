@@ -1,91 +1,60 @@
-using System;
-using System.Collections;
 using UnityEngine;
 
+// Loads the content a level needs when it starts and releases it when the level ends.
+// Right now that is the level's music bundle; more per-level content can be added to LevelDefinition.
 public class AssetBundleLevelLoader : MonoBehaviour
 {
-    private AssetBundle loadedBundle;
-    private readonly System.Collections.Generic.Dictionary<string, UnityEngine.Object> loadedAssets =
-        new System.Collections.Generic.Dictionary<string, UnityEngine.Object>(StringComparer.OrdinalIgnoreCase);
+    private string heldBundle;
 
-    public event Action<string, bool> LoadingFinished;
-
-    public void LoadLevelBundle(int level)
+    // Listens for levels starting.
+    private void OnEnable()
     {
-        StartCoroutine(LoadRoutine(level));
+        GameEvents.LevelStarted += OnLevelStarted;
     }
 
-    private IEnumerator LoadRoutine(int level)
+    // Stops listening.
+    private void OnDisable()
     {
-        if (loadedBundle != null)
+        GameEvents.LevelStarted -= OnLevelStarted;
+    }
+
+    // Swaps to the new level's content: acquire the new bundle first, then release the old one,
+    // so a bundle shared by both levels is never unloaded and reloaded.
+    private void OnLevelStarted(LevelDefinition level)
+    {
+        if (level == null || ContentManager.Instance == null)
         {
-            loadedBundle.Unload(false);
-            loadedBundle = null;
+            return;
         }
-        loadedAssets.Clear();
-
-        string platformFolder = GetPlatformFolder();
-        string path = System.IO.Path.Combine(Application.streamingAssetsPath, platformFolder, $"level-{level}");
-        AssetBundleCreateRequest request = AssetBundle.LoadFromFileAsync(path);
-        yield return request;
-
-        if (request.assetBundle == null)
+        string previous = heldBundle;
+        heldBundle = level.MusicBundle;
+        ContentManager.Instance.Acquire(level.MusicBundle, handle =>
         {
-            LoadingFinished?.Invoke($"Level {level} local assets unavailable; using scene assets.", false);
-            yield break;
-        }
-
-        loadedBundle = request.assetBundle;
-        AssetBundleRequest assetsRequest = loadedBundle.LoadAllAssetsAsync();
-        yield return assetsRequest;
-        foreach (UnityEngine.Object asset in assetsRequest.allAssets)
-        {
-            if (asset != null)
+            if (heldBundle != level.MusicBundle)
             {
-                loadedAssets[asset.name] = asset;
+                return;
             }
-        }
-        LoadingFinished?.Invoke($"Level {level} AssetBundle loaded.", true);
-    }
-
-    public bool TryGetPrefab(string assetName, out GameObject prefab)
-    {
-        if (loadedAssets.TryGetValue(assetName, out UnityEngine.Object asset))
+            if (!handle.Success)
+            {
+                GameEvents.RaiseNotification("Level music could not be loaded. Continuing without it.");
+                return;
+            }
+            AudioManager.Instance?.PlayMusic(handle.Get<AudioClip>(level.MusicAsset));
+        });
+        if (previous != null)
         {
-            prefab = asset as GameObject;
-            return prefab != null;
+            ContentManager.Instance.Release(previous);
         }
-        prefab = null;
-        return false;
     }
 
-    public void Unload()
-    {
-        if (loadedBundle != null)
-        {
-            loadedBundle.Unload(true);
-            loadedBundle = null;
-        }
-        loadedAssets.Clear();
-    }
-
-    private static string GetPlatformFolder()
-    {
-#if UNITY_ANDROID
-        return "Android";
-#elif UNITY_IOS
-        return "iOS";
-#elif UNITY_WEBGL
-        return "WebGL";
-#elif UNITY_STANDALONE_WIN
-        return "StandaloneWindows";
-#else
-        return "StandaloneWindows";
-#endif
-    }
-
+    // Releases the level's content when the scene is unloaded.
     private void OnDestroy()
     {
-        Unload();
+        if (heldBundle != null && ContentManager.Instance != null)
+        {
+            AudioManager.Instance?.PlayMusic(null, 0.01f);
+            ContentManager.Instance.Release(heldBundle);
+            heldBundle = null;
+        }
     }
 }

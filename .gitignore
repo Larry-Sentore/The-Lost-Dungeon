@@ -112,3 +112,7 @@ InitTestScene*.unity*
 
 # Auto-generated cache in Assets folder
 /[Aa]ssets/[Ss]ceneDependencyCache*
+
+# Built AssetBundles (rebuilt automatically before every player build, see README)
+/[Aa]ssets/[Ss]treamingAssets/Content/
+/[Aa]ssets/[Ss]treamingAssets/Content.meta
