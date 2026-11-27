@@ -1,56 +1,47 @@
-using System;
-using System.Collections;
-using System.Text;
+using System.Collections.Generic;
 using UnityEngine;
-using UnityEngine.Networking;
 
-[Serializable]
-public class LeaderboardEntry
-{
-    public string PlayerName;
-    public int Score;
-}
-
+// The local leaderboard: the best scores, ranked with the game's merge sort and saved in the JSON save file.
 public class LeaderboardService : MonoBehaviour
 {
-    private const string Endpoint = "https://jsonplaceholder.typicode.com/posts";
+    public const int MaxEntries = 10;
 
-    public event Action<bool, string> RequestCompleted;
-
-    public void SubmitScore(string playerName, int score)
+    // Adds a score and returns its rank (1 = best). Returns 0 if it did not make the top list.
+    public int Record(string playerName, int score, int level)
     {
-        StartCoroutine(SubmitRoutine(playerName, score));
+        List<LeaderboardRecord> records = SaveSystem.Data.Leaderboard;
+        LeaderboardRecord record = new LeaderboardRecord { PlayerName = playerName, Score = score, Level = level };
+        records.Add(record);
+        List<LeaderboardRecord> ranked = Rank(records);
+        if (ranked.Count > MaxEntries)
+        {
+            ranked.RemoveRange(MaxEntries, ranked.Count - MaxEntries);
+        }
+        SaveSystem.Data.Leaderboard = ranked;
+        int rank = ranked.IndexOf(record) + 1;
+        return rank;
     }
 
-    private IEnumerator SubmitRoutine(string playerName, int score)
+    // Returns the records from best to worst. Ties keep their original order (merge sort is stable).
+    public static List<LeaderboardRecord> Rank(IReadOnlyList<LeaderboardRecord> records)
     {
-        LeaderboardEntry entry = new LeaderboardEntry { PlayerName = playerName, Score = score };
-        string json = JsonUtility.ToJson(entry);
-        using UnityWebRequest request = new UnityWebRequest(Endpoint, "POST");
-        byte[] body = Encoding.UTF8.GetBytes(json);
-        request.uploadHandler = new UploadHandlerRaw(body);
-        request.downloadHandler = new DownloadHandlerBuffer();
-        request.SetRequestHeader("Content-Type", "application/json");
-        yield return request.SendWebRequest();
+        return GameplayAlgorithms.MergeSort(records, (a, b) => b.Score.CompareTo(a.Score));
+    }
 
-#if UNITY_WEBGL
-        if (request.result == UnityWebRequest.Result.ConnectionError ||
-            request.result == UnityWebRequest.Result.ProtocolError)
+    // Builds a short text version of the top scores for the UI.
+    public static string FormatTop(int count)
+    {
+        List<LeaderboardRecord> records = SaveSystem.Data.Leaderboard;
+        if (records.Count == 0)
         {
-            RequestCompleted?.Invoke(false, "Online leaderboard unavailable. Progress remains saved locally.");
-            GameEvents.RaiseRequestStatusChanged("Online leaderboard unavailable. Progress remains saved locally.", false);
-            yield break;
+            return "No scores yet";
         }
-#else
-        if (request.result != UnityWebRequest.Result.Success)
+        System.Text.StringBuilder text = new System.Text.StringBuilder();
+        for (int i = 0; i < Mathf.Min(count, records.Count); i++)
         {
-            RequestCompleted?.Invoke(false, "Online leaderboard unavailable. Progress remains saved locally.");
-            GameEvents.RaiseRequestStatusChanged("Online leaderboard unavailable. Progress remains saved locally.", false);
-            yield break;
+            LeaderboardRecord r = records[i];
+            text.AppendLine($"{i + 1}. {r.PlayerName}  {r.Score}  (L{r.Level})");
         }
-#endif
-
-        RequestCompleted?.Invoke(true, "Score submitted.");
-        GameEvents.RaiseRequestStatusChanged("Score submitted.", true);
+        return text.ToString();
     }
 }
