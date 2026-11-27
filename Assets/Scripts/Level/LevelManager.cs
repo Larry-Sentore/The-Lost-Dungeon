@@ -2,264 +2,314 @@ using System;
 using System.Collections.Generic;
 using UnityEngine;
 
+// Runs one level at a time: turns on that level's enemy group, tracks the enemies, spawns the
+// treasure chest when they are all defeated, and records the result when the chest is opened.
 [DisallowMultipleComponent]
 public class LevelManager : MonoBehaviour
 {
-    private readonly Dictionary<int, EnemyComposition> compositions = new Dictionary<int, EnemyComposition>();
     private readonly List<EnemyController> activeEnemies = new List<EnemyController>();
-    private int currentLevel = 1;
-    private AssetBundleLevelLoader assetLoader;
+    private readonly GameObject[] enemyGroups = new GameObject[ProgressionRules.LevelCount];
+    private LevelDefinition currentDefinition;
+    private int currentLevel;
+    private bool levelFinished;
+    private float levelStartTime;
+    private int damageTaken;
+    private int gemsAtStart;
+    private PlayerController player;
+    private TreasureChest chest;
 
     public int CurrentLevel => currentLevel;
+    public LevelDefinition CurrentDefinition => currentDefinition;
     public int AliveEnemyCount => activeEnemies.Count;
+    public float ElapsedTime => currentLevel > 0 ? Time.time - levelStartTime : 0f;
+    public IReadOnlyList<EnemyController> ActiveEnemies => activeEnemies;
 
+    // Finds the enemy group for each level and hides them all until a level starts.
     private void Awake()
     {
-        assetLoader = gameObject.GetComponent<AssetBundleLevelLoader>();
-        if (assetLoader == null)
+        for (int level = 1; level <= enemyGroups.Length; level++)
         {
-            assetLoader = gameObject.AddComponent<AssetBundleLevelLoader>();
+            enemyGroups[level - 1] = FindSceneObject($"Level_{level}_Enemies");
+            if (enemyGroups[level - 1] == null)
+            {
+                Debug.LogError($"Level enemy group 'Level_{level}_Enemies' was not found.");
+            }
+            else
+            {
+                enemyGroups[level - 1].SetActive(false);
+            }
         }
-        compositions[1] = new EnemyComposition(1, 0, 0, 0);
-        compositions[2] = new EnemyComposition(2, 1, 0, 0);
-        compositions[3] = new EnemyComposition(0, 0, 2, 0);
-        compositions[4] = new EnemyComposition(3, 2, 2, 0);
-        compositions[5] = new EnemyComposition(0, 5, 0, 1);
+        GameEvents.PlayerDamaged += OnPlayerDamaged;
     }
 
+    // Tells the UI which levels are locked or unlocked.
     private void Start()
     {
-        SaveData data = JsonProgressStore.Load();
-        if (data != null)
+        for (int level = 1; level <= ProgressionRules.LevelCount; level++)
         {
-            ApplyLockedLevelVisuals(data.HighestUnlockedLevel);
+            GameEvents.RaiseLevelUnlockChanged(level, ProgressionRules.IsUnlocked(SaveSystem.Data, level));
         }
     }
 
-    public void StartLevel(int level)
+    // Stops listening to enemies and events.
+    private void OnDestroy()
     {
-        SaveData data = JsonProgressStore.Load();
-        int unlocked = data?.HighestUnlockedLevel ?? 1;
-        if (level < 1 || level > 5)
-        {
-            return;
-        }
-        if (level > unlocked)
-        {
-            return;
-        }
-
-        currentLevel = level;
-        assetLoader?.LoadLevelBundle(level);
-        ClearExistingEnemyObjects();
-        ClearLevelEnemies();
-        BuildLevel(level);
-        GameEvents.RaiseObjectiveChanged($"Defeat every enemy in level {level}");
-        SaveData current = data ?? new SaveData();
-        current.CompletedLevel = data?.CompletedLevel ?? 0;
-        current.HighestUnlockedLevel = unlocked;
-        JsonProgressStore.Save(current);
+        GameEvents.PlayerDamaged -= OnPlayerDamaged;
+        UnsubscribeFromActiveEnemies();
     }
 
-    private void BuildLevel(int level)
+    // Stops tracking enemies when the game closes, so their destruction does not count as a win.
+    private void OnApplicationQuit()
     {
-        EnemyComposition composition = compositions[level];
-        EnemyController skeletonTemplate = FindTemplate("Skeleton Variant", EnemyKind.Skeleton);
-        EnemyController cannonTemplate = FindTemplate("CannonMachine", EnemyKind.CannonRobot);
-        EnemyController rockTemplate = FindTemplate("Giant01 - Golem", EnemyKind.RockGiant);
-
-        Spawn(skeletonTemplate, EnemyKind.Skeleton, composition.Skeletons);
-        Spawn(cannonTemplate, EnemyKind.CannonRobot, composition.CannonRobots);
-        Spawn(rockTemplate, EnemyKind.RockGiant, composition.RockGiants);
-        Spawn(cannonTemplate, EnemyKind.GiantCannonBoss, composition.GiantCannons);
+        StopTrackingForSceneReload();
     }
 
-    private EnemyController FindTemplate(string name, EnemyKind kind)
+    // Stops tracking the current level so reloading the scene does not count as finishing it.
+    public void StopTrackingForSceneReload()
     {
-        if (assetLoader != null)
-        {
-            if (TryFindBundledTemplate(name, out EnemyController bundledTemplate))
-            {
-                bundledTemplate.Configure(kind);
-                bundledTemplate.gameObject.SetActive(true);
-                return bundledTemplate;
-            }
-        }
-
-        EnemyController[] existing = FindObjectsByType<EnemyController>(FindObjectsInactive.Include);
-        foreach (EnemyController enemy in existing)
-        {
-            if (enemy.name.Contains(name, StringComparison.OrdinalIgnoreCase) &&
-                enemy.Kind == kind)
-            {
-                enemy.gameObject.SetActive(true);
-                return enemy;
-            }
-        }
-
-        foreach (GameObject root in FindObjectsByType<GameObject>(FindObjectsInactive.Include))
-        {
-            if (root.name.Contains(name, StringComparison.OrdinalIgnoreCase))
-            {
-                EnemyController enemy = root.GetComponent<EnemyController>();
-                if (enemy == null)
-                {
-                    enemy = AddEnemyComponents(root, kind);
-                }
-                enemy.gameObject.SetActive(true);
-                return enemy;
-            }
-        }
-
-        GameObject fallback = new GameObject(name);
-        fallback.transform.position = new Vector3(8f, 0f, 10f);
-        return AddEnemyComponents(fallback, kind);
+        levelFinished = true;
+        currentLevel = 0;
+        UnsubscribeFromActiveEnemies();
+        activeEnemies.Clear();
     }
 
-    private bool TryFindBundledTemplate(string name, out EnemyController template)
+    // Starts a level if it is unlocked: moves the player to the spawn point, turns on that level's
+    // enemies and tracks them. Returns false (with a log message) if it could not start.
+    public bool StartLevel(int level)
     {
-        template = null;
-        if (!assetLoader.TryGetPrefab(name, out GameObject prefab))
+        LevelDefinition definition = LevelCatalog.Get(level);
+        if (definition == null || !ProgressionRules.IsUnlocked(SaveSystem.Data, level))
         {
             return false;
         }
-        GameObject instance = Instantiate(prefab);
-        template = instance.GetComponent<EnemyController>() ?? instance.AddComponent<EnemyController>();
-        return template != null;
-    }
-
-    private void Spawn(EnemyController template, EnemyKind kind, int count)
-    {
-        if (count <= 0)
+        GameObject group = enemyGroups[level - 1];
+        if (group == null)
         {
-            if (template != null)
-            {
-                template.gameObject.SetActive(false);
-            }
-            return;
+            Debug.LogError($"Cannot start level {level}: its scene enemy group is missing.");
+            return false;
+        }
+        Transform spawnPoint = FindSpawnPoint(level);
+        player = FindAnyObjectByType<PlayerController>(FindObjectsInactive.Include);
+        if (spawnPoint == null || player == null)
+        {
+            Debug.LogError($"Cannot start level {level}: missing SpawnPoint_Level_{level} or the player.");
+            return false;
         }
 
-        Vector3 center = template != null
-            ? template.transform.position
-            : new Vector3(8f, 0f, 10f);
-
-        for (int i = 0; i < count; i++)
+        ClearActiveLevel();
+        group.SetActive(true);
+        List<EnemyController> enemies = PrepareGroupEnemies(group);
+        if (enemies.Count == 0)
         {
-            EnemyController enemy = i == 0 && kind != EnemyKind.GiantCannonBoss
-                ? template
-                : Instantiate(template);
-            if (enemy == null)
-            {
-                continue;
-            }
+            Debug.LogError($"Cannot start level {level}: '{group.name}' contains no enemies.");
+            group.SetActive(false);
+            return false;
+        }
 
-            enemy.name = $"{kind} {i + 1}";
-            enemy.gameObject.SetActive(true);
-            enemy.Configure(kind);
-            if (kind == EnemyKind.GiantCannonBoss)
-            {
-                enemy.transform.localScale *= 2.5f;
-                enemy.name = "Giant Cannon Boss";
-            }
-            float angle = (360f / Mathf.Max(1, count)) * i;
-            Vector3 offset = Quaternion.Euler(0f, angle, 0f) * Vector3.forward * (count == 1 ? 0f : 2.2f);
-            enemy.transform.position = center + offset;
+        currentLevel = level;
+        currentDefinition = definition;
+        levelFinished = false;
+        levelStartTime = Time.time;
+        damageTaken = 0;
+        gemsAtStart = player.Inventory.Count(ItemCatalog.Gem);
+        player.PrepareForLevel(spawnPoint.position);
+
+        foreach (EnemyController enemy in enemies)
+        {
+            enemy.Configure(enemy.Kind);
             enemy.Died += HandleEnemyDied;
             activeEnemies.Add(enemy);
         }
+
+        GameEvents.RaiseLevelStarted(definition);
+        GameEvents.RaiseEnemyDefeated(activeEnemies.Count);
+        UpdateObjective();
+        return true;
     }
 
+    // Finds the spawn point object for a level.
+    private static Transform FindSpawnPoint(int level)
+    {
+        GameObject spawnPoint = FindSceneObject($"SpawnPoint_Level_{level}");
+        return spawnPoint != null ? spawnPoint.transform : null;
+    }
+
+    // Finds any object in the scene by name, including hidden ones.
+    private static GameObject FindSceneObject(string objectName)
+    {
+        foreach (GameObject sceneObject in FindObjectsByType<GameObject>(FindObjectsInactive.Include))
+        {
+            if (sceneObject.name == objectName && sceneObject.scene.IsValid())
+            {
+                return sceneObject;
+            }
+        }
+        return null;
+    }
+
+    // Gets every enemy in a level group. Enemies placed with an EnemyController keep the type set in the
+    // Inspector; objects without one get a type guessed from their name.
+    private static List<EnemyController> PrepareGroupEnemies(GameObject group)
+    {
+        List<EnemyController> enemies = new List<EnemyController>();
+        for (int i = 0; i < group.transform.childCount; i++)
+        {
+            Transform enemyRoot = group.transform.GetChild(i);
+            EnemyController[] controllers = enemyRoot.GetComponentsInChildren<EnemyController>(true);
+            if (controllers.Length == 0)
+            {
+                controllers = new[] { EnemyController.Setup(enemyRoot.gameObject, GetKindFromName(enemyRoot.name)) };
+            }
+            foreach (EnemyController controller in controllers)
+            {
+                if (controller != null && !controller.IsDead && !enemies.Contains(controller))
+                {
+                    enemies.Add(controller);
+                }
+            }
+        }
+        return enemies;
+    }
+
+    // Guesses the enemy type from the object's name (only used when no EnemyController was set up).
+    public static EnemyKind GetKindFromName(string objectName)
+    {
+        if (objectName.IndexOf("Boss", StringComparison.OrdinalIgnoreCase) >= 0)
+        {
+            return EnemyKind.GiantCannonBoss;
+        }
+        if (objectName.IndexOf("Golem", StringComparison.OrdinalIgnoreCase) >= 0 ||
+            objectName.IndexOf("Giant", StringComparison.OrdinalIgnoreCase) >= 0)
+        {
+            return EnemyKind.RockGiant;
+        }
+        if (objectName.IndexOf("Cannon", StringComparison.OrdinalIgnoreCase) >= 0)
+        {
+            return EnemyKind.CannonRobot;
+        }
+        return EnemyKind.Skeleton;
+    }
+
+    // Counts damage taken this level (it lowers the score).
+    private void OnPlayerDamaged(int amount)
+    {
+        if (currentLevel > 0 && !levelFinished)
+        {
+            damageTaken += amount;
+        }
+    }
+
+    // Called when an enemy dies. When the last one falls, a treasure chest appears where it died.
     private void HandleEnemyDied(EnemyController enemy)
     {
-        if (!activeEnemies.Remove(enemy))
+        enemy.Died -= HandleEnemyDied;
+        if (currentLevel <= 0 || levelFinished || !activeEnemies.Remove(enemy))
         {
             return;
         }
+        SaveSystem.Data.Stats.EnemiesDefeated++;
         GameEvents.RaiseEnemyDefeated(activeEnemies.Count);
-        if (activeEnemies.Count == 0)
+        if (activeEnemies.Count > 0)
         {
-            JsonProgressStore.MarkLevelComplete(currentLevel);
-            GameEvents.RaiseLevelCompleted(currentLevel);
-            GameEvents.RaiseObjectiveChanged($"Level {currentLevel} complete");
-            LeaderboardService leaderboard = FindAnyObjectByType<LeaderboardService>();
-            leaderboard?.SubmitScore("Player", currentLevel * 1000);
+            UpdateObjective();
+            return;
+        }
+
+        Vector3 position = enemy.transform.position;
+        Vector3 facePlayer = player != null ? player.transform.position - position : Vector3.forward;
+        facePlayer.y = 0f;
+        Quaternion rotation = facePlayer.sqrMagnitude > 0.01f ? Quaternion.LookRotation(facePlayer) : Quaternion.identity;
+        chest = TreasureChest.Spawn(position, rotation, currentDefinition.ChestGems, currentDefinition.ChestGold, CompleteLevel);
+        GameEvents.RaiseObjectiveChanged("All enemies defeated! Open the treasure chest");
+        GameEvents.RaiseNotification("A treasure chest has appeared!");
+    }
+
+    // Updates the objective text with how many enemies are left.
+    private void UpdateObjective()
+    {
+        int left = activeEnemies.Count;
+        GameEvents.RaiseObjectiveChanged($"Defeat the enemies ({left} left), then claim the treasure");
+    }
+
+    // Finishes the level: works out the score, saves progress and rewards, and tells everyone.
+    private void CompleteLevel()
+    {
+        if (levelFinished || currentLevel <= 0)
+        {
+            return;
+        }
+        levelFinished = true;
+        SaveData data = SaveSystem.Data;
+        float seconds = Time.time - levelStartTime;
+        int gems = Mathf.Max(0, player.Inventory.Count(ItemCatalog.Gem) - gemsAtStart);
+        int bounty = BestiaryService.Instance != null
+            ? BestiaryService.Instance.GetBounty(currentDefinition.FeaturedEnemy)
+            : EnemyProfiles.Get(currentDefinition.FeaturedEnemy).Bounty;
+        int score = ProgressionRules.CalculateScore(currentLevel, seconds, gems, damageTaken, bounty);
+
+        int newlyUnlocked = ProgressionRules.MarkCompleted(data, currentLevel);
+        data.Stats.TotalScore += score;
+        float best = data.Stats.BestTimes[currentLevel - 1];
+        if (best <= 0f || seconds < best)
+        {
+            data.Stats.BestTimes[currentLevel - 1] = seconds;
+        }
+        string unlocked = null;
+        if (!string.IsNullOrEmpty(currentDefinition.Unlockable) && !data.Unlockables.Contains(currentDefinition.Unlockable))
+        {
+            data.Unlockables.Add(currentDefinition.Unlockable);
+            unlocked = currentDefinition.Unlockable;
+        }
+
+        LeaderboardService leaderboard = GetComponent<LeaderboardService>();
+        int rank = leaderboard != null ? leaderboard.Record(data.Settings.PlayerName, score, currentLevel) : 0;
+        SaveSystem.Save();
+
+        if (newlyUnlocked > 0)
+        {
+            GameEvents.RaiseLevelUnlockChanged(newlyUnlocked, true);
+        }
+        GameEvents.RaiseObjectiveChanged($"Level {currentLevel} complete");
+        GameEvents.RaiseLevelResultReady(new LevelResult
+        {
+            Level = currentLevel,
+            Seconds = seconds,
+            Score = score,
+            Rank = rank,
+            GemsCollected = gems,
+            Unlocked = unlocked
+        });
+        GameEvents.RaiseLevelCompleted(currentLevel);
+    }
+
+    // Stops tracking the current enemies, removes the chest and hides all enemy groups.
+    private void ClearActiveLevel()
+    {
+        UnsubscribeFromActiveEnemies();
+        activeEnemies.Clear();
+        if (chest != null)
+        {
+            Destroy(chest.gameObject);
+            chest = null;
+        }
+        foreach (GameObject group in enemyGroups)
+        {
+            if (group != null)
+            {
+                group.SetActive(false);
+            }
         }
     }
 
-    private void ClearLevelEnemies()
+    // Stops listening to every tracked enemy.
+    private void UnsubscribeFromActiveEnemies()
     {
         foreach (EnemyController enemy in activeEnemies)
         {
             if (enemy != null)
             {
                 enemy.Died -= HandleEnemyDied;
-                enemy.gameObject.SetActive(false);
             }
-        }
-        activeEnemies.Clear();
-    }
-
-    private void ClearExistingEnemyObjects()
-    {
-        foreach (EnemyController enemy in FindObjectsByType<EnemyController>(FindObjectsInactive.Include))
-        {
-            if (enemy == null)
-            {
-                continue;
-            }
-            enemy.Died -= HandleEnemyDied;
-            enemy.gameObject.SetActive(false);
-        }
-    }
-
-    public static EnemyController AddEnemyComponents(GameObject target, EnemyKind kind)
-    {
-        EnemyController controller = target.GetComponent<EnemyController>();
-        if (controller == null)
-        {
-            controller = target.AddComponent<EnemyController>();
-        }
-        controller.Configure(kind);
-
-        if (target.GetComponent<CapsuleCollider>() == null)
-        {
-            CapsuleCollider collider = target.AddComponent<CapsuleCollider>();
-            collider.height = kind == EnemyKind.RockGiant || kind == EnemyKind.GiantCannonBoss ? 2.8f : 1.8f;
-            collider.radius = kind == EnemyKind.GiantCannonBoss ? 1.2f : 0.55f;
-            collider.center = new Vector3(0f, collider.height * 0.5f, 0f);
-        }
-
-        Rigidbody rigidbody = target.GetComponent<Rigidbody>();
-        if (rigidbody == null)
-        {
-            rigidbody = target.AddComponent<Rigidbody>();
-        }
-        rigidbody.isKinematic = true;
-        rigidbody.useGravity = true;
-        return controller;
-    }
-
-    private void ApplyLockedLevelVisuals(int highestUnlocked)
-    {
-        for (int level = 1; level <= 5; level++)
-        {
-            GameEvents.RaiseLevelUnlockChanged(level, level <= highestUnlocked);
-        }
-    }
-
-    private readonly struct EnemyComposition
-    {
-        public readonly int Skeletons;
-        public readonly int CannonRobots;
-        public readonly int RockGiants;
-        public readonly int GiantCannons;
-
-        public EnemyComposition(int skeletons, int cannons, int giants, int giantCannons)
-        {
-            Skeletons = skeletons;
-            CannonRobots = cannons;
-            RockGiants = giants;
-            GiantCannons = giantCannons;
         }
     }
 }
